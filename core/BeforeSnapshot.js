@@ -19,6 +19,7 @@
 const os = require('os');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { detectOs } = require('./OsDetection');
 const { detectPackageManagers } = require('./PackageManagerDetection');
@@ -150,10 +151,167 @@ function collectTempFiles() {
   }
 }
 
+function sha256(content) {
+  return crypto.createHash('sha256').update(content).digest('hex');
+}
+
 /**
- * Captures a full "before" snapshot of the system.
- *
- * @returns {Promise<object>} snapshot - see shape below
+ * Collects a fingerprint of a single file: mode/permissions, mtime,
+ * and a content hash — deliberately NOT the raw content for private
+ * keys, since a snapshot or report might get shared, and a hash is
+ * enough to detect any modification.
+ */
+function fingerprintFile(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return null;
+    const content = fs.readFileSync(filePath);
+    return {
+      mode: stat.mode & 0o777,
+      size: stat.size,
+      mtime: stat.mtime.toISOString(),
+      sha256: sha256(content),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Collects SSH-key-related state: fingerprints (mode/size/mtime/hash,
+ * never raw key material) for everything under ~/.ssh, plus the full
+ * text of authorized_keys specifically, since its *contents* (which
+ * public keys are trusted) matter as much as whether the file changed.
+ */
+function collectSshState() {
+  const sshDir = path.join(os.homedir(), '.ssh');
+  const files = {};
+  let authorizedKeysContent = null;
+
+  try {
+    for (const name of fs.readdirSync(sshDir)) {
+      const fullPath = path.join(sshDir, name);
+      const fingerprint = fingerprintFile(fullPath);
+      if (fingerprint) files[name] = fingerprint;
+    }
+    try {
+      authorizedKeysContent = fs.readFileSync(path.join(sshDir, 'authorized_keys'), 'utf8');
+    } catch {
+      // No authorized_keys file — that's a valid state.
+    }
+  } catch {
+    // No ~/.ssh directory at all — that's a valid state.
+  }
+
+  return { files, authorizedKeysContent };
+}
+
+/**
+ * Collects sudo/privilege-escalation configuration: /etc/sudoers plus
+ * every file under /etc/sudoers.d/. Reading these often requires
+ * elevated permissions; if unreadable, that's recorded rather than
+ * crashing the whole snapshot.
+ */
+function collectSudoState() {
+  const files = {};
+  const sudoersPath = '/etc/sudoers';
+  const sudoersDir = '/etc/sudoers.d';
+
+  try {
+    files[sudoersPath] = fs.readFileSync(sudoersPath, 'utf8');
+  } catch {
+    files[sudoersPath] = null; // unreadable or absent (e.g. non-Unix host)
+  }
+
+  try {
+    for (const name of fs.readdirSync(sudoersDir)) {
+      const fullPath = path.join(sudoersDir, name);
+      try {
+        files[fullPath] = fs.readFileSync(fullPath, 'utf8');
+      } catch {
+        files[fullPath] = null;
+      }
+    }
+  } catch {
+    // No sudoers.d directory — that's a valid state (or non-Unix host).
+  }
+
+  return { files };
+}
+
+/**
+ * Collects startup/persistence items relevant to the current OS —
+ * the general cross-platform baseline for A8. Deeper OS-specific
+ * coverage (full registry Run keys/services/scheduled tasks on
+ * Windows, systemd units on Linux) is the job of G1/G2; this covers
+ * the most common, highest-signal locations on each platform.
+ */
+function collectStartupItems(osId) {
+  const items = {};
+
+  if (osId === 'macos') {
+    const dirs = [
+      path.join(os.homedir(), 'Library', 'LaunchAgents'),
+      '/Library/LaunchAgents',
+      '/Library/LaunchDaemons',
+    ];
+    for (const dir of dirs) {
+      try {
+        for (const name of fs.readdirSync(dir)) {
+          const fullPath = path.join(dir, name);
+          const fingerprint = fingerprintFile(fullPath);
+          if (fingerprint) items[fullPath] = fingerprint;
+        }
+      } catch {
+        // Directory doesn't exist or isn't readable — valid state.
+      }
+    }
+  } else if (osId === 'linux') {
+    const dirs = ['/etc/cron.d', '/etc/cron.daily', path.join(os.homedir(), '.config', 'systemd', 'user')];
+    for (const dir of dirs) {
+      try {
+        for (const name of fs.readdirSync(dir)) {
+          const fullPath = path.join(dir, name);
+          const fingerprint = fingerprintFile(fullPath);
+          if (fingerprint) items[fullPath] = fingerprint;
+        }
+      } catch {
+        // Directory doesn't exist or isn't readable — valid state.
+      }
+    }
+  } else if (osId === 'windows') {
+    const startupDir = path.join(
+      os.homedir(),
+      'AppData', 'Roaming', 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup'
+    );
+    try {
+      for (const name of fs.readdirSync(startupDir)) {
+        const fullPath = path.join(startupDir, name);
+        const fingerprint = fingerprintFile(fullPath);
+        if (fingerprint) items[fullPath] = fingerprint;
+      }
+    } catch {
+      // Directory doesn't exist or isn't readable — valid state.
+    }
+  }
+
+  return { items };
+}
+
+/**
+ * Collects the full set of security-sensitive state used by A8:
+ * SSH keys, sudo configuration, and startup/persistence items.
+ */
+function collectSecurityState(osId) {
+  return {
+    ssh: collectSshState(),
+    sudo: collectSudoState(),
+    startupItems: collectStartupItems(osId),
+  };
+}
+
+
+ /* @returns {Promise<object>} snapshot - see shape below
  *
  * Snapshot shape:
  * {
@@ -193,6 +351,7 @@ async function captureBeforeSnapshot() {
       processes,
       network,
       tempFiles: collectTempFiles(),
+      security: collectSecurityState(osInfo.id),
     },
   };
 }
@@ -209,6 +368,7 @@ module.exports = {
   collectProcesses,
   collectNetworkPorts,
   collectTempFiles,
+  collectSecurityState,
 };
 
 // Allow running this file directly for a quick manual check:

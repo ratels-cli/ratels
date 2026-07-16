@@ -20,6 +20,7 @@ const {
   collectProcesses,
   collectNetworkPorts,
   collectTempFiles,
+  collectSecurityState,
 } = require('./BeforeSnapshot');
 
 /**
@@ -55,6 +56,7 @@ async function captureAfterSnapshot(options = {}) {
       processes,
       network,
       tempFiles: collectTempFiles(),
+      security: collectSecurityState(osInfo.id),
     },
   };
 }
