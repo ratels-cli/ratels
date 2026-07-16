@@ -84,10 +84,38 @@ const DEFAULT_CONFIG = Object.freeze({
     channel: 'slack',
     webhookUrl: '',
   },
+  // Any extra files you personally want watched for changes, on top
+  // of the built-in shell config files above. Useful for things like
+  // a project-specific script, a cron file, an app config, an SSH
+  // client config, etc. Absolute paths, or paths starting with `~`
+  // for your home directory. Each one is content-diffed the same way
+  // shell config files are (added/removed/changed lines), and any
+  // change here always counts as suspicious, since you explicitly
+  // asked to be watching it.
+  //
+  // Example:
+  //   customFiles:
+  //     - '~/.npmrc'
+  //     - '/etc/hosts'
+  //     - '~/projects/myapp/.env'
+  customFiles: [],
 });
 
-/** Deep-merges `override` onto `base`, without mutating either. */
+/**
+ * Deep-merges `override` onto `base`, without mutating either.
+ * Arrays are treated as atomic values — an override array REPLACES
+ * the base array wholesale, rather than being merged element by
+ * element. This matters: `typeof someArray === 'object'` is true in
+ * JS, so without this check, arrays would fall into the generic
+ * object-merge branch below, and `{...someArray}` silently turns an
+ * array into a plain object like `{0: 'a', 1: 'b'}` — which then
+ * breaks every `.map()`/`.forEach()` call downstream that expected a
+ * real array (this is exactly what happened to shellConfigFiles).
+ */
 function deepMerge(base, override) {
+  if (Array.isArray(base) || Array.isArray(override)) {
+    return override !== undefined ? override : base;
+  }
   if (typeof base !== 'object' || base === null) return override ?? base;
   if (typeof override !== 'object' || override === null) return override ?? base;
 
