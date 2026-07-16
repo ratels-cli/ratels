@@ -13,6 +13,7 @@
 //   A1  OsDetection
 //   A2  PackageManagerDetection
 //   D1  Config (ensureConfigExists / loadConfig)
+//   D1+ Config.customFiles (add a temp watched file, confirm A6 catches its edit)
 //   E4  CredentialStore (set/get/delete round-trip, using a fake key)
 //   A3  BeforeSnapshot (via A4)
 //   A4  InstallMonitor (runs `npm install left-pad` for real)
@@ -30,13 +31,16 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const { detectOs } = require('../core/OsDetection');
 const { detectPackageManagers } = require('../core/PackageManagerDetection');
-const { ensureConfigExists, loadConfig, getConfigPath } = require('../core/Config');
+const { ensureConfigExists, loadConfig, saveConfig, getConfigPath } = require('../core/Config');
 const { setCredential, getCredential, deleteCredential } = require('../core/CredentialStore');
 const { monitorInstall } = require('../core/InstallMonitor');
+const { captureBeforeSnapshot } = require('../core/BeforeSnapshot');
+const { captureAfterSnapshot } = require('../core/AfterSnapshot');
 const { diffEnvPathShell } = require('../core/EnvPathShellDiff');
 const { diffNetworkProcessTemp } = require('../core/NetworkProcessTempDiff');
 const { flagSecurityChanges } = require('../core/SecurityFlagsDiff');
@@ -129,6 +133,89 @@ async function main() {
     if (!config.ai || !config.paths || !config.collectors) {
       throw new Error('Loaded config is missing expected top-level sections');
     }
+    if (!config.shellConfigFiles || !config.shellConfigFiles[osInfo?.id]) {
+      throw new Error(`Loaded config is missing shellConfigFiles entries for OS "${osInfo?.id}"`);
+    }
+    log(`Shell config files configured for ${osInfo?.id}: ${config.shellConfigFiles[osInfo.id].join(', ')}`);
+  });
+
+  // D1+ — Config.customFiles end-to-end: create a real throwaway file,
+  // register it, modify it mid-test, and verify A6/A9/B1 all catch it.
+  // Backs up and restores the real config in a finally block, so this
+  // is safe to run even against a real ~/.pkgmonitorrc.
+  await step('D1+ Config.customFiles (create/modify/detect/report)', async () => {
+    const originalConfig = loadConfig();
+    const testFilePath = path.join(os.tmpdir(), 'pkg-monitor-custom-file-test.conf');
+    const subFailures = [];
+
+    const check = (name, condition, detail = '') => {
+      log(`  [${condition ? 'PASS' : 'FAIL'}] ${name}${detail ? ` — ${detail}` : ''}`);
+      if (!condition) subFailures.push(name);
+    };
+
+    try {
+      fs.writeFileSync(testFilePath, 'setting=safe_value\n');
+      log(`  Created test file: ${testFilePath}`);
+
+      saveConfig({ ...originalConfig, customFiles: [testFilePath] });
+      log('  Temporarily added it to config.customFiles');
+
+      const before = await captureBeforeSnapshot();
+      check(
+        'Before snapshot picked up the test file',
+        Object.prototype.hasOwnProperty.call(before.state.customFiles, testFilePath),
+        `keys found: ${Object.keys(before.state.customFiles).join(', ') || '(none)'}`
+      );
+
+      fs.writeFileSync(testFilePath, 'setting=CHANGED_by_test\nextra_line=added\n');
+      log('  Modified the test file (simulating tampering)');
+
+      const after = await captureAfterSnapshot({ beforeId: before.id });
+
+      const diff = diffEnvPathShell(before, after);
+      const changedEntry = diff.customFiles.changed.find((f) => f.path === testFilePath);
+      check('A6 diff detected the change', Boolean(changedEntry));
+      check(
+        'A6 diff captured the correct added line',
+        Boolean(changedEntry?.addedLines?.includes('setting=CHANGED_by_test')),
+        `addedLines: ${JSON.stringify(changedEntry?.addedLines)}`
+      );
+      check(
+        'A6 diff captured the correct removed line',
+        Boolean(changedEntry?.removedLines?.includes('setting=safe_value')),
+        `removedLines: ${JSON.stringify(changedEntry?.removedLines)}`
+      );
+      check('hasSuspiciousChanges is true (custom file changes always count)', diff.hasSuspiciousChanges === true);
+
+      const customReport = computeStructuredDiff({ before, after, command: null, args: null });
+      check(
+        'Overall risk reflects the custom file change (medium or higher)',
+        ['medium', 'high', 'critical'].includes(customReport.overallRisk),
+        `overallRisk: ${customReport.overallRisk}`
+      );
+      check(
+        'Summary mentions the custom file change',
+        customReport.summary.some((line) => line.includes('custom watched file'))
+      );
+
+      const customText = renderPlainTextReport(customReport);
+      check('Plain-text report includes the custom file path', customText.includes(testFilePath));
+      check('Plain-text report includes the [WATCHED] marker', customText.includes('[WATCHED]'));
+      check('Plain-text report shows the actual added line', customText.includes('setting=CHANGED_by_test'));
+    } finally {
+      saveConfig(originalConfig);
+      log('  Restored original ~/.pkgmonitorrc');
+      try {
+        fs.unlinkSync(testFilePath);
+        log(`  Removed test file: ${testFilePath}`);
+      } catch {
+        // Already gone — fine.
+      }
+    }
+
+    if (subFailures.length > 0) {
+      throw new Error(`${subFailures.length} sub-check(s) failed: ${subFailures.join('; ')}`);
+    }
   });
 
   // E4 — CredentialStore round-trip, using an obviously fake test key
@@ -152,6 +239,8 @@ async function main() {
     log(`before snapshot id: ${result.before?.id}`);
     log(`after snapshot id:  ${result.after?.id}`);
     log(`exit code:          ${result.execution?.exitCode}`);
+    const scannedShellFiles = Object.keys(result.before?.state?.shellConfigFiles || {});
+    log(`shell config files found on disk for this OS: ${scannedShellFiles.length ? scannedShellFiles.join(', ') : '(none exist on this machine)'}`);
     if (result.error) throw new Error(`monitorInstall reported an error: ${result.error}`);
     if (result.execution?.exitCode !== 0) throw new Error(`npm install exited with code ${result.execution?.exitCode}`);
     return result;
