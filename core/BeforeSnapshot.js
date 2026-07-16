@@ -46,29 +46,46 @@ function collectPath() {
 }
 
 /**
- * Collects the contents of common shell configuration files, so
- * tampering (e.g. an injected malicious alias or PATH prepend) can be
- * detected even if it doesn't show up as a running-process or env-var
- * change at capture time. Missing files are simply omitted.
+ * Collects the contents of shell/profile configuration files relevant
+ * to the current OS, so tampering (e.g. an injected malicious alias
+ * or PATH prepend) can be detected even if it doesn't show up as a
+ * running-process or env-var change at capture time. Missing files
+ * are simply omitted.
+ *
+ * The actual list of files checked is OS-specific and comes from the
+ * config file (D1's Config.js: config.shellConfigFiles.<osId>) so it
+ * can be edited without touching code — e.g. adding a shell you use
+ * that isn't covered by the defaults. Falls back to sane built-in
+ * defaults if the config file doesn't override this section.
+ *
+ * @param {string} osId - 'macos' | 'linux' | 'windows' | 'unknown'
  */
-function collectShellConfigFiles() {
-  const home = os.homedir();
-  const candidates = [
-    '.bashrc',
-    '.bash_profile',
-    '.bash_login',
-    '.profile',
-    '.zshrc',
-    '.zprofile',
-    '.zshenv',
-    '.config/fish/config.fish',
-  ].map((rel) => path.join(home, rel));
+function collectShellConfigFiles(osId) {
+  // Lazily required to avoid a hard dependency cycle with Config.js.
+  const { loadConfig } = require('./Config');
+  const config = loadConfig();
 
-  // System-wide files matter too — PATH hijacking doesn't have to be per-user.
-  const systemWide = ['/etc/profile', '/etc/bashrc', '/etc/zshrc'];
+  const FALLBACK_UNIX = ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zprofile', '.zshenv', '.config/fish/config.fish'];
+  const FALLBACK_WINDOWS = [
+    'Documents\\WindowsPowerShell\\Microsoft.PowerShell_profile.ps1',
+    'Documents\\PowerShell\\Microsoft.PowerShell_profile.ps1',
+  ];
+  const FALLBACK_SYSTEM_WIDE = {
+    macos: ['/etc/profile', '/etc/bashrc', '/etc/zshrc'],
+    linux: ['/etc/profile', '/etc/bash.bashrc', '/etc/zsh/zshrc'],
+    windows: [],
+  };
+
+  const perUserRelative =
+    config?.shellConfigFiles?.[osId] ||
+    (osId === 'windows' ? FALLBACK_WINDOWS : FALLBACK_UNIX);
+  const systemWide = config?.shellConfigFiles?.systemWide?.[osId] || FALLBACK_SYSTEM_WIDE[osId] || [];
+
+  const home = os.homedir();
+  const perUserAbsolute = perUserRelative.map((rel) => path.join(home, rel));
 
   const files = {};
-  for (const filePath of [...candidates, ...systemWide]) {
+  for (const filePath of [...perUserAbsolute, ...systemWide]) {
     try {
       const stat = fs.statSync(filePath);
       if (!stat.isFile()) continue;
@@ -347,7 +364,7 @@ async function captureBeforeSnapshot() {
     state: {
       env: collectEnvVars(),
       path: collectPath(),
-      shellConfigFiles: collectShellConfigFiles(),
+      shellConfigFiles: collectShellConfigFiles(osInfo.id),
       processes,
       network,
       tempFiles: collectTempFiles(),

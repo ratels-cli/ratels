@@ -52,7 +52,7 @@ async function captureAfterSnapshot(options = {}) {
     state: {
       env: collectEnvVars(),
       path: collectPath(),
-      shellConfigFiles: collectShellConfigFiles(),
+      shellConfigFiles: collectShellConfigFiles(osInfo.id),
       processes,
       network,
       tempFiles: collectTempFiles(),

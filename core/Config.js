@@ -59,6 +59,26 @@ const DEFAULT_CONFIG = Object.freeze({
     network: true,
     npmAudit: false,
   },
+  // Which shell/profile config files to scan for tampering (A6),
+  // broken out per OS since each shell ecosystem uses different files.
+  // Paths are relative to the user's home directory unless they start
+  // with '/' or a drive letter. Edit these lists to add a shell you
+  // use that isn't covered, or remove ones you don't use.
+  shellConfigFiles: {
+    macos: ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zprofile', '.zshenv', '.config/fish/config.fish'],
+    linux: ['.bashrc', '.bash_profile', '.bash_login', '.profile', '.zshrc', '.zprofile', '.zshenv', '.config/fish/config.fish'],
+    windows: [
+      'Documents\\WindowsPowerShell\\Microsoft.PowerShell_profile.ps1',
+      'Documents\\PowerShell\\Microsoft.PowerShell_profile.ps1',
+    ],
+    // System-wide files (not per-user) — PATH hijacking doesn't have
+    // to happen in your personal profile.
+    systemWide: {
+      macos: ['/etc/profile', '/etc/bashrc', '/etc/zshrc'],
+      linux: ['/etc/profile', '/etc/bash.bashrc', '/etc/zsh/zshrc'],
+      windows: [],
+    },
+  },
   notifications: {
     enabled: false,
     channel: 'slack',
