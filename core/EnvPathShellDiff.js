@@ -124,6 +124,7 @@ function diffShellConfigFiles(beforeFiles = {}, afterFiles = {}) {
  *   env: ReturnType<diffEnvVars>,
  *   path: ReturnType<diffPath>,
  *   shellConfigFiles: ReturnType<diffShellConfigFiles>,
+ *   customFiles: ReturnType<diffShellConfigFiles>,
  *   hasSuspiciousChanges: boolean
  * }}
  */
@@ -131,14 +132,25 @@ function diffEnvPathShell(before, after) {
   const env = diffEnvVars(before?.state?.env, after?.state?.env);
   const path = diffPath(before?.state?.path, after?.state?.path);
   const shellConfigFiles = diffShellConfigFiles(before?.state?.shellConfigFiles, after?.state?.shellConfigFiles);
+  // Reuses the same generic { path: {content, size, mtime} } diff
+  // logic as shellConfigFiles — user-specified files from
+  // config.customFiles are collected in exactly the same shape.
+  const customFiles = diffShellConfigFiles(before?.state?.customFiles, after?.state?.customFiles);
 
   const hasSuspiciousChanges =
     path.prependedEntries.length > 0 ||
     path.reordered ||
     shellConfigFiles.changed.some((f) => f.suspicious) ||
-    shellConfigFiles.added.length > 0;
+    shellConfigFiles.added.length > 0 ||
+    // Any change at all to a custom file counts as suspicious — the
+    // user explicitly asked to be watching it, so there's no
+    // "harmless" change to filter out here the way there is for
+    // arbitrary shell config lines.
+    customFiles.added.length > 0 ||
+    customFiles.removed.length > 0 ||
+    customFiles.changed.length > 0;
 
-  return { env, path, shellConfigFiles, hasSuspiciousChanges };
+  return { env, path, shellConfigFiles, customFiles, hasSuspiciousChanges };
 }
 
 module.exports = {

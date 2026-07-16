@@ -104,6 +104,9 @@ function buildSummary({ envPathShell, networkProcessTemp, security }) {
   if (envPathShell.path.prependedEntries.length > 0) lines.push(`${envPathShell.path.prependedEntries.length} new PATH entr(y/ies) inserted ahead of existing ones.`);
   if (envPathShell.shellConfigFiles.changed.length > 0) lines.push(`${envPathShell.shellConfigFiles.changed.length} shell config file(s) modified.`);
 
+  const customChanges = envPathShell.customFiles.added.length + envPathShell.customFiles.removed.length + envPathShell.customFiles.changed.length;
+  if (customChanges > 0) lines.push(`${customChanges} custom watched file(s) changed.`);
+
   if (networkProcessTemp.network.opened.length > 0) lines.push(`${networkProcessTemp.network.opened.length} new network port(s) opened.`);
   if (networkProcessTemp.processes.started.length > 0) lines.push(`${networkProcessTemp.processes.started.length} new process name(s) started.`);
   if (networkProcessTemp.tempFiles.added.length > 0) lines.push(`${networkProcessTemp.tempFiles.added.length} new temp file(s) created.`);

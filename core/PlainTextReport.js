@@ -107,6 +107,19 @@ function renderPlainTextReport(report) {
     }
   }
 
+  const customFiles = report.envPathShell?.customFiles || { added: [], removed: [], changed: [] };
+  if (customFiles.added.length || customFiles.removed.length || customFiles.changed.length) {
+    out.push('');
+    out.push('  Custom watched files (from config.customFiles):');
+    for (const p of customFiles.added) out.push(`      + created: ${p}`);
+    for (const p of customFiles.removed) out.push(`      - removed: ${p}`);
+    for (const f of customFiles.changed) {
+      out.push(`      ~ modified: ${f.path}  [WATCHED]`);
+      for (const l of f.addedLines) out.push(`          + ${l}`);
+      for (const l of f.removedLines) out.push(`          - ${l}`);
+    }
+  }
+
   out.push(section('NETWORK / PROCESSES / TEMP FILES'));
   const netDiff = report.networkProcessTemp?.network || { opened: [], closed: [] };
   const procDiff = report.networkProcessTemp?.processes || { started: [], stopped: [], countChanged: [] };
