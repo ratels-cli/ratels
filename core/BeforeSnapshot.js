@@ -101,6 +101,39 @@ function collectShellConfigFiles(osId) {
   return files;
 }
 
+/**
+ * Collects the contents of any extra files the user personally asked
+ * to watch, via config.customFiles (D1's Config.js). Same shape and
+ * method as collectShellConfigFiles — content, size, mtime — so the
+ * same diff logic (A6's diffShellConfigFiles) can be reused on it
+ * without any special-casing.
+ */
+function collectCustomFiles() {
+  // Lazily required to avoid a hard dependency cycle with Config.js.
+  const { loadConfig } = require('./Config');
+  const config = loadConfig();
+  const entries = config?.customFiles || [];
+
+  const files = {};
+  for (const rawPath of entries) {
+    const filePath = rawPath.startsWith('~') ? path.join(os.homedir(), rawPath.slice(1)) : rawPath;
+    try {
+      const stat = fs.statSync(filePath);
+      if (!stat.isFile()) continue;
+      files[filePath] = {
+        content: fs.readFileSync(filePath, 'utf8'),
+        size: stat.size,
+        mtime: stat.mtime.toISOString(),
+      };
+    } catch {
+      // File doesn't exist or isn't readable right now — that's still
+      // a valid state to record (e.g. it might get created later,
+      // which the diff will then flag as "added").
+    }
+  }
+  return files;
+}
+
 /** Collects a snapshot of currently running processes (name + pid only). */
 async function collectProcesses(osId) {
   if (osId === 'windows') {
@@ -131,22 +164,86 @@ async function collectProcesses(osId) {
 async function collectNetworkPorts(osId) {
   if (osId === 'windows') {
     const output = await run('netstat', ['-ano']);
-    return parseNetstatLines(output);
+    return parseNetstatWindowsLines(output);
   }
-  // macOS and Linux both support `-an`; Linux also has `ss` but netstat
-  // remains broadly available and keeps parsing consistent for now.
+
+  if (osId === 'linux') {
+    const output = await run('netstat', ['-an']);
+    if (output.trim()) return parseNetstatUnixLines(output);
+    // Many modern Linux distros ship without net-tools, so `netstat`
+    // may not exist at all — fall back to `ss`, which is installed by
+    // default almost everywhere `netstat` used to be.
+    const ssOutput = await run('ss', ['-tunap']);
+    return parseSsLines(ssOutput);
+  }
+
+  // macOS
   const output = await run('netstat', ['-an']);
-  return parseNetstatLines(output);
+  return parseNetstatUnixLines(output);
 }
 
-function parseNetstatLines(output) {
+/**
+ * Parses macOS/Linux `netstat -an` output. Both share the same column
+ * layout: Proto, Recv-Q, Send-Q, Local Address, Foreign Address, State.
+ * (Address format differs — macOS uses dots as the port separator even
+ * for IPv4, e.g. "127.0.0.1.8080"; Linux uses a colon, "127.0.0.1:8080"
+ * — but that's just a string to compare before/after, so no
+ * normalization is needed for this tool's purpose.)
+ */
+function parseNetstatUnixLines(output) {
   return output
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => /^(tcp|udp)/i.test(line))
     .map((line) => {
       const cols = line.split(/\s+/);
-      return { protocol: cols[0], localAddress: cols[3] || cols[1] || null, state: cols[5] || null };
+      return { protocol: cols[0], localAddress: cols[3] || null, state: cols[5] || null, pid: null };
+    });
+}
+
+/**
+ * Parses Windows `netstat -ano` output. Different column layout than
+ * Unix netstat: no Recv-Q/Send-Q columns, so Local Address is column 1
+ * not 3 — and UDP rows have NO State column at all, which shifts PID
+ * from column 4 to column 3 on those lines. Handled explicitly here
+ * rather than assuming a fixed column count.
+ */
+function parseNetstatWindowsLines(output) {
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^(TCP|UDP)/i.test(line))
+    .map((line) => {
+      const cols = line.split(/\s+/);
+      const protocol = cols[0];
+      const localAddress = cols[1] || null;
+      // TCP lines: Proto, Local, Foreign, State, PID (5 columns)
+      // UDP lines: Proto, Local, Foreign, PID       (4 columns, no State)
+      const hasState = cols.length >= 5;
+      const state = hasState ? cols[3] : null;
+      const pid = hasState ? cols[4] : cols[3];
+      return { protocol, localAddress, state, pid: pid ? Number(pid) || null : null };
+    });
+}
+
+/**
+ * Parses `ss -tunap` output (Linux fallback when netstat is missing).
+ * Columns: Netid, State, Recv-Q, Send-Q, Local Address:Port, Peer Address:Port, Process.
+ */
+function parseSsLines(output) {
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^(tcp|udp)/i.test(line))
+    .map((line) => {
+      const cols = line.split(/\s+/);
+      const pidMatch = line.match(/pid=(\d+)/);
+      return {
+        protocol: cols[0],
+        localAddress: cols[4] || null,
+        state: cols[1] || null,
+        pid: pidMatch ? Number(pidMatch[1]) : null,
+      };
     });
 }
 
@@ -365,6 +462,7 @@ async function captureBeforeSnapshot() {
       env: collectEnvVars(),
       path: collectPath(),
       shellConfigFiles: collectShellConfigFiles(osInfo.id),
+      customFiles: collectCustomFiles(),
       processes,
       network,
       tempFiles: collectTempFiles(),
@@ -382,6 +480,7 @@ module.exports = {
   collectEnvVars,
   collectPath,
   collectShellConfigFiles,
+  collectCustomFiles,
   collectProcesses,
   collectNetworkPorts,
   collectTempFiles,
