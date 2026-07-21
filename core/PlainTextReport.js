@@ -54,6 +54,15 @@ function renderPlainTextReport(report) {
     out.push(`  - ${item}`);
   }
 
+  if (report.aiAnalysis) {
+    out.push(section('AI ANALYSIS'));
+    out.push(`  Provider: ${report.aiAnalysis.provider} (${report.aiAnalysis.model})${report.aiAnalysis.redacted ? '  [sent redacted — secret values stripped before leaving this machine]' : ''}`);
+    out.push('');
+    for (const paragraphLine of report.aiAnalysis.text.split('\n')) {
+      out.push(`  ${paragraphLine}`);
+    }
+  }
+
   out.push(section('SECURITY FINDINGS (SSH / sudo / startup items)'));
   const findings = report.security?.findings || [];
   if (findings.length === 0) {

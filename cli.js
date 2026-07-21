@@ -39,8 +39,9 @@ const { runFullScan } = require('./core/FullScan');
 const { computeStructuredDiff } = require('./core/StructuredDiffEngine');
 const { renderPlainTextReport } = require('./core/PlainTextReport');
 const { saveSnapshotPair, saveReport } = require('./core/SnapshotStore');
+const { runAiAnalysis } = require('./core/AiAnalysis');
 
-const KNOWN_FLAGS = new Set(['--json', '--help', '-h']);
+const KNOWN_FLAGS = new Set(['--json', '--help', '-h', '--ai']);
 
 const HELP_TEXT = `
 RATELS — supply chain security monitor for package installs
@@ -67,13 +68,23 @@ Options:
   --json         Print the report as JSON on stdout instead of plain
                  text. Status messages still go to stderr, so stdout
                  is clean JSON for piping into other tools or CI.
+  --ai           Run AI-assisted analysis on the diff and include a
+                 plain-language summary + verdict in the report.
+                 Uses whichever provider is set in ai.provider in
+                 ~/.ratelsrc: 'ollama' (local, full detail, nothing
+                 leaves your machine) or 'openai'/'anthropic' (cloud —
+                 secret-shaped values like env var contents and shell
+                 config lines are redacted before being sent, unless
+                 you've explicitly configured otherwise).
   -h, --help     Show this help and exit.
 
 Examples:
   ratels npm install left-pad
   ratels --json npm install left-pad > report.json
+  ratels --ai npm install left-pad
   ratels pip install requests
   ratels scan
+  ratels --ai scan
   ratels --json scan > scan-report.json
 
 Exit codes:
@@ -124,6 +135,7 @@ async function main() {
   }
 
   const jsonMode = flags.has('--json');
+  const aiMode = flags.has('--ai');
 
   // B6 — "scan" is a reserved subcommand: a standalone full-system
   // scan, diffed against the most recent saved snapshot, rather than
@@ -139,17 +151,36 @@ async function main() {
       console.error(`Comparing against previous snapshot: ${result.previous.id} (${result.previous.capturedAt})`);
     }
 
-    if (jsonMode) {
-      console.log(JSON.stringify(result.report, null, 2));
-    } else {
-      console.log('\n' + result.text);
+    let report = result.report;
+    let text = result.text;
+
+    // E1 — optional AI-assisted analysis, only when --ai is passed.
+    if (aiMode) {
+      console.error('Running AI-assisted analysis...');
+      try {
+        const aiAnalysis = await runAiAnalysis(report);
+        report = { ...report, aiAnalysis };
+        text = renderPlainTextReport(report);
+        console.error(`AI analysis complete (${aiAnalysis.provider}/${aiAnalysis.model}).`);
+      } catch (err) {
+        console.error(`AI analysis failed, continuing without it: ${err.message}`);
+      }
     }
 
-    console.error(`\nSaved snapshot:       ${result.snapshotPath}`);
-    console.error(`Saved report (json):  ${result.jsonPath}`);
-    console.error(`Saved report (text):  ${result.textPath}`);
+    if (jsonMode) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log('\n' + text);
+    }
 
-    if (result.report.overallRisk === 'critical' || result.report.overallRisk === 'high') {
+    // Re-save with the AI section included, if it ran.
+    const { jsonPath, textPath } = saveReport(report, text);
+
+    console.error(`\nSaved snapshot:       ${result.snapshotPath}`);
+    console.error(`Saved report (json):  ${jsonPath}`);
+    console.error(`Saved report (text):  ${textPath}`);
+
+    if (report.overallRisk === 'critical' || report.overallRisk === 'high') {
       process.exitCode = 2;
     }
     return;
@@ -165,7 +196,19 @@ async function main() {
   }
 
   // A9 — combine A6/A7/A8 into one structured diff.
-  const report = computeStructuredDiff(bundle);
+  let report = computeStructuredDiff(bundle);
+
+  // E1 — optional AI-assisted analysis, only when --ai is passed.
+  if (aiMode) {
+    console.error('Running AI-assisted analysis...');
+    try {
+      const aiAnalysis = await runAiAnalysis(report);
+      report = { ...report, aiAnalysis };
+      console.error(`AI analysis complete (${aiAnalysis.provider}/${aiAnalysis.model}).`);
+    } catch (err) {
+      console.error(`AI analysis failed, continuing without it: ${err.message}`);
+    }
+  }
 
   // B1 — render it as plain text (used for the saved .txt report either way).
   const text = renderPlainTextReport(report);
