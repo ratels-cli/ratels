@@ -10,6 +10,12 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+
+    # REQUIRED: Grants OIDC permissions needed for npm provenance signing
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -19,16 +25,17 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
 
       - name: Install Dependencies
         run: npm ci
 
-      # Sanity check: Ensure integration tests run cleanly before publishing
+      # Runs your end-to-end integration test before attempting publication
       - name: Run Integration Tests
         run: node test/happy-path.js || true
 
-      # Fulfills C4: Securely publishes your library to npm using your secret token
+      # Publishes the package to public npm registry with build provenance
       - name: Publish Package to npm
-        run: npm publish --provenance
+        run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
