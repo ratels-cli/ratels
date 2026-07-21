@@ -10,7 +10,8 @@
 // B3 (local snapshot/report storage) into one command.
 //
 // Usage:
-//   node cli.js [options] <command> [args...]
+//   ratels [options] <command> [args...]
+//   npx ratels [options] <command> [args...]
 //
 // Options:
 //   --json         Print the structured diff report as JSON on stdout
@@ -22,9 +23,9 @@
 //   -h, --help     Show this help and exit (B5).
 //
 // Examples:
-//   node cli.js npm install left-pad
-//   node cli.js --json npm install left-pad > report.json
-//   node cli.js pip install requests
+//   ratels npm install left-pad
+//   npx ratels --json npm install left-pad > report.json
+//   ratels pip install requests
 //
 // Note: only flags listed above, appearing BEFORE the wrapped command,
 // are treated as cli.js's own options. Everything from the first
@@ -45,7 +46,8 @@ const HELP_TEXT = `
 Supply Chain Security Monitor
 
 Usage:
-  node cli.js [options] <command> [args...]
+  ratels [options] <command> [args...]
+  npx ratels [options] <command> [args...]
 
 Wraps a package-install command, capturing a before/after snapshot of
 your system and reporting anything that changed — env vars, PATH,
@@ -59,9 +61,9 @@ Options:
   -h, --help     Show this help and exit.
 
 Examples:
-  node cli.js npm install left-pad
-  node cli.js --json npm install left-pad > report.json
-  node cli.js pip install requests
+  ratels npm install left-pad
+  npx ratels --json npm install left-pad > report.json
+  ratels pip install requests
 
 Exit codes:
   0   Completed, no high/critical risk findings.
