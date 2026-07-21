@@ -37,7 +37,7 @@ function renderPlainTextReport(report) {
   const out = [];
 
   out.push(line('='));
-  out.push('SUPPLY CHAIN SECURITY MONITOR - INSTALL REPORT');
+  out.push('RATELS - PACKAGE INSTALL REPORT');
   out.push(line('='));
 
   const meta = report.meta || {};

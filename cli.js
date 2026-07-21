@@ -43,11 +43,13 @@ const { saveSnapshotPair, saveReport } = require('./core/SnapshotStore');
 const KNOWN_FLAGS = new Set(['--json', '--help', '-h']);
 
 const HELP_TEXT = `
-Supply Chain Security Monitor
+RATELS — supply chain security monitor for package installs
 
 Usage:
-  node cli.js [options] <command> [args...]
-  node cli.js [options] scan
+  ratels [options] <command> [args...]
+  ratels [options] scan
+
+  (During local development, run as: node cli.js ...)
 
 Wraps a package-install command, capturing a before/after snapshot of
 your system and reporting anything that changed — env vars, PATH,
@@ -68,11 +70,11 @@ Options:
   -h, --help     Show this help and exit.
 
 Examples:
-  node cli.js npm install left-pad
-  node cli.js --json npm install left-pad > report.json
-  node cli.js pip install requests
-  node cli.js scan
-  node cli.js --json scan > scan-report.json
+  ratels npm install left-pad
+  ratels --json npm install left-pad > report.json
+  ratels pip install requests
+  ratels scan
+  ratels --json scan > scan-report.json
 
 Exit codes:
   0   Completed, no high/critical risk findings.
@@ -80,7 +82,7 @@ Exit codes:
   2   Completed, but risk was HIGH or CRITICAL — check the report.
 
 Every snapshot and report is also saved locally for later review
-(see ~/.pkg_monitor/snapshots and ~/.pkg_monitor/reports).
+(see ~/.ratels/snapshots and ~/.ratels/reports).
 `.trim();
 
 /**

@@ -19,9 +19,12 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
-const STORE_DIR = path.join(os.homedir(), '.pkg_monitor');
+const STORE_DIR = path.join(os.homedir(), '.ratels');
 const KEY_FILE = path.join(STORE_DIR, 'credentials.key');
 const CREDENTIALS_FILE = path.join(STORE_DIR, 'credentials.enc.json');
+const LEGACY_STORE_DIR = path.join(os.homedir(), '.pkg_monitor');
+const LEGACY_KEY_FILE = path.join(LEGACY_STORE_DIR, 'credentials.key');
+const LEGACY_CREDENTIALS_FILE = path.join(LEGACY_STORE_DIR, 'credentials.enc.json');
 
 const ALGORITHM = 'aes-256-gcm';
 const KEY_LENGTH_BYTES = 32; // 256 bits
@@ -41,6 +44,11 @@ function getOrCreateEncryptionKey() {
   ensureStoreDir();
 
   if (fs.existsSync(KEY_FILE)) {
+    return Buffer.from(fs.readFileSync(KEY_FILE, 'utf8').trim(), 'base64');
+  }
+
+  if (fs.existsSync(LEGACY_KEY_FILE)) {
+    fs.renameSync(LEGACY_KEY_FILE, KEY_FILE);
     return Buffer.from(fs.readFileSync(KEY_FILE, 'utf8').trim(), 'base64');
   }
 
@@ -75,7 +83,14 @@ function decrypt(entry, key) {
 }
 
 function readCredentialsFile() {
-  if (!fs.existsSync(CREDENTIALS_FILE)) return {};
+  if (!fs.existsSync(CREDENTIALS_FILE)) {
+    if (fs.existsSync(LEGACY_CREDENTIALS_FILE)) {
+      ensureStoreDir();
+      fs.renameSync(LEGACY_CREDENTIALS_FILE, CREDENTIALS_FILE);
+    } else {
+      return {};
+    }
+  }
   try {
     return JSON.parse(fs.readFileSync(CREDENTIALS_FILE, 'utf8'));
   } catch {

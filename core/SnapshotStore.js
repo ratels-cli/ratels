@@ -5,7 +5,7 @@
 //
 // Paths now come from the config file (D1's Config.js:
 // paths.snapshotStore / paths.auditArchive), so editing
-// ~/.pkgmonitorrc actually changes where things get saved — no code
+// ~/.ratelsrc actually changes where things get saved — no code
 // changes needed. Falls back to the same sane defaults if the config
 // file doesn't exist yet or doesn't override these paths.
 //
@@ -25,7 +25,7 @@ const path = require('path');
 /**
  * Returns the current effective paths — from the config file if set,
  * otherwise the built-in defaults. Read fresh each call (rather than
- * cached at require-time) so editing ~/.pkgmonitorrc and re-running
+ * cached at require-time) so editing ~/.ratelsrc and re-running
  * picks up the change immediately, without restarting anything long-lived.
  */
 function getPaths() {
@@ -34,8 +34,8 @@ function getPaths() {
   const config = loadConfig();
 
   return {
-    snapshotStore: config?.paths?.snapshotStore || path.join(os.homedir(), '.pkg_monitor', 'snapshots'),
-    auditArchive: config?.paths?.auditArchive || path.join(os.homedir(), '.pkg_monitor', 'reports'),
+    snapshotStore: config?.paths?.snapshotStore || path.join(os.homedir(), '.ratels', 'snapshots'),
+    auditArchive: config?.paths?.auditArchive || path.join(os.homedir(), '.ratels', 'reports'),
   };
 }
 

@@ -286,7 +286,7 @@ async function main() {
     log('--- rendered report ---');
     log(text);
     log('--- end rendered report ---');
-    if (!text.includes('SUPPLY CHAIN SECURITY MONITOR')) {
+    if (!text.includes('RATELS')) {
       throw new Error('Rendered report is missing expected header');
     }
     return text;

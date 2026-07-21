@@ -6,8 +6,8 @@
 // per-collector on/off toggles, so that I can control the tool's
 // behavior without editing source code.
 //
-// Config file lives at ~/.pkgmonitorrc (YAML), matching the example
-// in the Product Backlog doc (Section 1, Epic D). Requires the
+// Config file lives at ~/.ratelsrc (YAML), matching the example in
+// the Product Backlog doc (Section 1, Epic D). Requires the
 // `js-yaml` package:
 //   npm install js-yaml
 //
@@ -26,10 +26,11 @@ const os = require('os');
 const path = require('path');
 const yaml = require('js-yaml');
 
-const CONFIG_PATH = path.join(os.homedir(), '.pkgmonitorrc');
+const CONFIG_PATH = path.join(os.homedir(), '.ratelsrc');
+const LEGACY_CONFIG_PATH = path.join(os.homedir(), '.pkgmonitorrc');
 
 /**
- * Default configuration, matching the example .pkgmonitorrc shape
+ * Default configuration, matching the example .ratelsrc shape
  * from the Product Backlog doc (Section 1, Epic D / D1).
  */
 const DEFAULT_CONFIG = Object.freeze({
@@ -49,8 +50,8 @@ const DEFAULT_CONFIG = Object.freeze({
     },
   },
   paths: {
-    auditArchive: '~/.pkg_monitor/reports',
-    snapshotStore: '~/.pkg_monitor/snapshots',
+    auditArchive: '~/.ratels/reports',
+    snapshotStore: '~/.ratels/snapshots',
   },
   collectors: {
     sshKeys: true,
@@ -134,12 +135,21 @@ function getConfigPath() {
 /**
  * Writes the default config file if one doesn't already exist yet.
  * Safe to call on every startup — never overwrites an existing file.
- * @returns {boolean} true if a new file was created
+ * If a legacy `.pkgmonitorrc` file exists (pre-rebrand) and the new
+ * `.ratelsrc` doesn't, migrates it by renaming rather than starting
+ * over with defaults — so existing settings survive the rename.
+ * @returns {boolean} true if a new file was created (fresh or migrated)
  */
 function ensureConfigExists() {
   if (fs.existsSync(CONFIG_PATH)) return false;
+
+  if (fs.existsSync(LEGACY_CONFIG_PATH)) {
+    fs.renameSync(LEGACY_CONFIG_PATH, CONFIG_PATH);
+    return true;
+  }
+
   const header =
-    '# Supply Chain Security Monitor configuration\n' +
+    '# Ratels configuration\n' +
     '# See docs for all available options.\n\n';
   fs.writeFileSync(CONFIG_PATH, header + yaml.dump(DEFAULT_CONFIG), { mode: 0o600 });
   return true;
@@ -153,16 +163,22 @@ function ensureConfigExists() {
  * @returns {object} the merged config
  */
 function loadConfig() {
-  if (!fs.existsSync(CONFIG_PATH)) {
+  const activePath = fs.existsSync(CONFIG_PATH)
+    ? CONFIG_PATH
+    : fs.existsSync(LEGACY_CONFIG_PATH)
+      ? LEGACY_CONFIG_PATH
+      : null;
+
+  if (!activePath) {
     return JSON.parse(JSON.stringify(DEFAULT_CONFIG));
   }
 
-  const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+  const raw = fs.readFileSync(activePath, 'utf8');
   let parsed;
   try {
     parsed = yaml.load(raw) || {};
   } catch (err) {
-    throw new Error(`Failed to parse config file at ${CONFIG_PATH}: ${err.message}`);
+    throw new Error(`Failed to parse config file at ${activePath}: ${err.message}`);
   }
 
   return deepMerge(DEFAULT_CONFIG, parsed);
@@ -171,7 +187,7 @@ function loadConfig() {
 /** Writes a full config object back to disk as YAML. */
 function saveConfig(config) {
   const header =
-    '# Supply Chain Security Monitor configuration\n' +
+    '# Ratels configuration\n' +
     '# See docs for all available options.\n\n';
   fs.writeFileSync(CONFIG_PATH, header + yaml.dump(config), { mode: 0o600 });
 }
