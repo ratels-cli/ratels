@@ -443,8 +443,9 @@ function collectSecurityState(osId) {
  *   }
  * }
  */
-async function captureBeforeSnapshot() {
+async function captureBeforeSnapshot(options = {}) {
   const osInfo = detectOs();
+  const type = options.type || 'before';
 
   const [packageManagers, processes, network] = await Promise.all([
     detectPackageManagers({ osId: osInfo.id }),
@@ -453,8 +454,8 @@ async function captureBeforeSnapshot() {
   ]);
 
   return {
-    id: `before-${Date.now()}`,
-    type: 'before',
+    id: `${type}-${Date.now()}`,
+    type,
     capturedAt: new Date().toISOString(),
     os: osInfo,
     packageManagers,

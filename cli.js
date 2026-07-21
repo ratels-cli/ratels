@@ -35,6 +35,7 @@
 'use strict';
 
 const { monitorInstall } = require('./core/InstallMonitor');
+const { runFullScan } = require('./core/FullScan');
 const { computeStructuredDiff } = require('./core/StructuredDiffEngine');
 const { renderPlainTextReport } = require('./core/PlainTextReport');
 const { saveSnapshotPair, saveReport } = require('./core/SnapshotStore');
@@ -46,11 +47,19 @@ Supply Chain Security Monitor
 
 Usage:
   node cli.js [options] <command> [args...]
+  node cli.js [options] scan
 
 Wraps a package-install command, capturing a before/after snapshot of
 your system and reporting anything that changed — env vars, PATH,
 shell config, network ports, processes, temp files, and
 security-sensitive items like SSH keys, sudoers, and startup entries.
+
+The "scan" subcommand runs a full standalone scan instead — no
+install command needed. It diffs your current system state against
+the most recently saved snapshot (from any previous install or scan),
+so it shows "what changed since I last looked." The very first scan
+on a machine has nothing to compare against yet, so it just
+establishes a baseline for next time.
 
 Options:
   --json         Print the report as JSON on stdout instead of plain
@@ -62,6 +71,8 @@ Examples:
   node cli.js npm install left-pad
   node cli.js --json npm install left-pad > report.json
   node cli.js pip install requests
+  node cli.js scan
+  node cli.js --json scan > scan-report.json
 
 Exit codes:
   0   Completed, no high/critical risk findings.
@@ -111,6 +122,36 @@ async function main() {
   }
 
   const jsonMode = flags.has('--json');
+
+  // B6 — "scan" is a reserved subcommand: a standalone full-system
+  // scan, diffed against the most recent saved snapshot, rather than
+  // wrapping an install command.
+  if (command === 'scan') {
+    console.error('Running full system scan...\n');
+
+    const result = await runFullScan();
+
+    if (result.isBaseline) {
+      console.error('First scan — baseline established, no prior snapshot to compare against.');
+    } else {
+      console.error(`Comparing against previous snapshot: ${result.previous.id} (${result.previous.capturedAt})`);
+    }
+
+    if (jsonMode) {
+      console.log(JSON.stringify(result.report, null, 2));
+    } else {
+      console.log('\n' + result.text);
+    }
+
+    console.error(`\nSaved snapshot:       ${result.snapshotPath}`);
+    console.error(`Saved report (json):  ${result.jsonPath}`);
+    console.error(`Saved report (text):  ${result.textPath}`);
+
+    if (result.report.overallRisk === 'critical' || result.report.overallRisk === 'high') {
+      process.exitCode = 2;
+    }
+    return;
+  }
 
   console.error(`Monitoring: ${command} ${args.join(' ')}\n`);
 
