@@ -139,6 +139,119 @@ function flagStartupItemChanges(before = {}, after = {}) {
   return findings;
 }
 
+/**
+ * Flags changes to Windows registry Run/RunOnce keys (G1). Any new
+ * entry is CRITICAL — this is the single most common Windows
+ * persistence mechanism, directly equivalent to a new LaunchAgent on
+ * macOS or a new systemd unit on Linux. A changed value (same value
+ * name, different command/path) is just as critical, since that's
+ * exactly how a legitimate autorun entry gets hijacked to point at
+ * something malicious instead.
+ */
+function flagRegistryRunKeyChanges(before = {}, after = {}) {
+  const findings = [];
+  const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
+
+  for (const key of allKeys) {
+    const beforeValue = before[key];
+    const afterValue = after[key];
+    if (beforeValue === afterValue) continue;
+
+    if (beforeValue === undefined) {
+      findings.push({ severity: SEVERITY.CRITICAL, category: 'windows-registry', message: `New registry autorun entry: ${key} -> ${afterValue}` });
+    } else if (afterValue === undefined) {
+      findings.push({ severity: SEVERITY.MEDIUM, category: 'windows-registry', message: `Registry autorun entry removed: ${key}` });
+    } else {
+      findings.push({
+        severity: SEVERITY.CRITICAL,
+        category: 'windows-registry',
+        message: `Registry autorun entry changed: ${key} ("${beforeValue}" -> "${afterValue}")`,
+      });
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * Flags changes to Windows services (G1). A brand-new service is
+ * HIGH — malware commonly installs itself as a service to survive
+ * reboots and run with elevated privileges. An existing service whose
+ * StartMode flips toward "Auto" is also worth flagging, since that's
+ * a common way to convert an already-installed-but-dormant service
+ * into a persistence mechanism without technically "adding" anything.
+ */
+function flagServiceChanges(before = {}, after = {}) {
+  const findings = [];
+  const allNames = new Set([...Object.keys(before), ...Object.keys(after)]);
+
+  for (const name of allNames) {
+    const beforeSvc = before[name];
+    const afterSvc = after[name];
+
+    if (!beforeSvc && afterSvc) {
+      findings.push({ severity: SEVERITY.HIGH, category: 'windows-service', message: `New Windows service installed: ${name} (${afterSvc.startType}, ${afterSvc.status})` });
+      continue;
+    }
+    if (beforeSvc && !afterSvc) {
+      findings.push({ severity: SEVERITY.LOW, category: 'windows-service', message: `Windows service removed: ${name}` });
+      continue;
+    }
+    if (beforeSvc.startType !== afterSvc.startType) {
+      const gotMoreAggressive = afterSvc.startType === 'Auto' && beforeSvc.startType !== 'Auto';
+      findings.push({
+        severity: gotMoreAggressive ? SEVERITY.MEDIUM : SEVERITY.LOW,
+        category: 'windows-service',
+        message: `Service "${name}" start type changed: ${beforeSvc.startType} -> ${afterSvc.startType}`,
+      });
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * Flags changes to Windows scheduled tasks (G1) — the modern
+ * equivalent of cron, and a common way for both legitimate installers
+ * and malware to re-trigger something on a schedule or at logon.
+ */
+function flagScheduledTaskChanges(before = {}, after = {}) {
+  const findings = [];
+  const allNames = new Set([...Object.keys(before), ...Object.keys(after)]);
+
+  for (const name of allNames) {
+    const beforeTask = before[name];
+    const afterTask = after[name];
+
+    if (!beforeTask && afterTask) {
+      findings.push({ severity: SEVERITY.HIGH, category: 'windows-task', message: `New scheduled task created: ${name} (${afterTask.state})` });
+    } else if (beforeTask && !afterTask) {
+      findings.push({ severity: SEVERITY.LOW, category: 'windows-task', message: `Scheduled task removed: ${name}` });
+    } else if (beforeTask.state !== afterTask.state) {
+      findings.push({ severity: SEVERITY.LOW, category: 'windows-task', message: `Scheduled task "${name}" state changed: ${beforeTask.state} -> ${afterTask.state}` });
+    }
+  }
+
+  return findings;
+}
+
+/**
+ * Runs all three Windows-specific G1 checks together. Returns an
+ * empty array on non-Windows hosts, or if the data wasn't collected
+ * for any reason (e.g. PowerShell unavailable).
+ */
+function flagWindowsPersistenceChanges(before, after) {
+  if (!before && !after) return [];
+  const b = before || {};
+  const a = after || {};
+
+  return [
+    ...flagRegistryRunKeyChanges(b.registryRunKeys, a.registryRunKeys),
+    ...flagServiceChanges(b.services, a.services),
+    ...flagScheduledTaskChanges(b.scheduledTasks, a.scheduledTasks),
+  ];
+}
+
 const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 
 /**
@@ -161,6 +274,7 @@ function flagSecurityChanges(before, after) {
     ...flagSshChanges(beforeSecurity.ssh, afterSecurity.ssh),
     ...flagSudoChanges(beforeSecurity.sudo, afterSecurity.sudo),
     ...flagStartupItemChanges(beforeSecurity.startupItems, afterSecurity.startupItems),
+    ...flagWindowsPersistenceChanges(beforeSecurity.windows, afterSecurity.windows),
   ].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity]);
 
   const counts = { critical: 0, high: 0, medium: 0, low: 0 };
@@ -176,6 +290,10 @@ module.exports = {
   flagSshChanges,
   flagSudoChanges,
   flagStartupItemChanges,
+  flagRegistryRunKeyChanges,
+  flagServiceChanges,
+  flagScheduledTaskChanges,
+  flagWindowsPersistenceChanges,
   flagSecurityChanges,
 };
 

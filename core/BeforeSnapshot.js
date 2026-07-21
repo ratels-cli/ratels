@@ -413,14 +413,133 @@ function collectStartupItems(osId) {
 }
 
 /**
- * Collects the full set of security-sensitive state used by A8:
- * SSH keys, sudo configuration, and startup/persistence items.
+ * Collects registry autorun entries from both the per-user Run/RunOnce
+ * keys and the machine-wide equivalents — the single most common
+ * Windows persistence mechanism, and the direct equivalent of macOS
+ * LaunchAgents / Linux systemd units for this OS.
+ *
+ * @returns {Record<string, string>} keyed by "HIVE\Path\ValueName", value is the command/path it runs
  */
-function collectSecurityState(osId) {
+async function collectRegistryRunKeys() {
+  const keysToCheck = [
+    ['HKCU', 'Software\\Microsoft\\Windows\\CurrentVersion\\Run'],
+    ['HKCU', 'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'],
+    ['HKLM', 'Software\\Microsoft\\Windows\\CurrentVersion\\Run'],
+    ['HKLM', 'Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce'],
+    // 32-bit apps on 64-bit Windows register here instead — a classic hiding spot.
+    ['HKLM', 'Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run'],
+  ];
+
+  const entries = {};
+  for (const [hive, keyPath] of keysToCheck) {
+    const output = await run('reg', ['query', `${hive}\\${keyPath}`]);
+    // Each real entry line looks like:  "    OneDrive    REG_SZ    C:\...\OneDrive.exe /background"
+    const lines = output.split('\n').map((l) => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      const match = line.match(/^(.+?)\s+(REG_SZ|REG_EXPAND_SZ|REG_MULTI_SZ|REG_DWORD|REG_BINARY)\s+(.*)$/);
+      if (!match) continue; // header lines, the key path itself, etc.
+      const [, valueName, , valueData] = match;
+      entries[`${hive}\\${keyPath}\\${valueName.trim()}`] = valueData.trim();
+    }
+  }
+  return entries;
+}
+
+/**
+ * Collects Windows services via PowerShell, which gives clean
+ * structured JSON instead of parsing `sc query`'s free-text output.
+ * A new service, or an existing service whose start mode flips to
+ * automatic, is a common persistence technique (malware installing
+ * itself as a service that survives reboots and runs as SYSTEM).
+ *
+ * @returns {Record<string, {status: string, startType: string}>} keyed by service name
+ */
+async function collectServices() {
+  const output = await run('powershell', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    'Get-CimInstance Win32_Service | Select-Object Name,State,StartMode | ConvertTo-Json -Compress',
+  ]);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    return {}; // PowerShell unavailable, or command failed — treat as "no data" rather than crashing.
+  }
+
+  const list = Array.isArray(parsed) ? parsed : [parsed];
+  const services = {};
+  for (const svc of list) {
+    if (!svc?.Name) continue;
+    services[svc.Name] = { status: svc.State || 'Unknown', startType: svc.StartMode || 'Unknown' };
+  }
+  return services;
+}
+
+/**
+ * Collects scheduled tasks via PowerShell's Get-ScheduledTask, the
+ * modern Windows equivalent of cron — used by both legitimate
+ * software and malware to re-run something on a schedule or at logon.
+ *
+ * @returns {Record<string, {state: string}>} keyed by "TaskPath\TaskName"
+ */
+async function collectScheduledTasks() {
+  const output = await run('powershell', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    'Get-ScheduledTask | Select-Object TaskName,TaskPath,State | ConvertTo-Json -Compress',
+  ]);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    return {}; // PowerShell unavailable, or command failed — treat as "no data" rather than crashing.
+  }
+
+  const list = Array.isArray(parsed) ? parsed : [parsed];
+  const tasks = {};
+  for (const task of list) {
+    if (!task?.TaskName) continue;
+    const key = `${task.TaskPath || ''}${task.TaskName}`;
+    tasks[key] = { state: String(task.State ?? 'Unknown') };
+  }
+  return tasks;
+}
+
+/**
+ * Collects the full set of Windows-specific persistence surfaces (G1):
+ * registry Run keys, services, and scheduled tasks. Only meaningful on
+ * Windows — returns null on other platforms, since these mechanisms
+ * don't exist there (macOS/Linux have their own equivalents already
+ * covered by collectStartupItems()).
+ */
+async function collectWindowsPersistence(osId) {
+  if (osId !== 'windows') return null;
+
+  const [registryRunKeys, services, scheduledTasks] = await Promise.all([
+    collectRegistryRunKeys(),
+    collectServices(),
+    collectScheduledTasks(),
+  ]);
+
+  return { registryRunKeys, services, scheduledTasks };
+}
+
+/**
+ * Collects the full set of security-sensitive state used by A8/G1:
+ * SSH keys, sudo configuration, startup/persistence items, and (on
+ * Windows only) registry Run keys, services, and scheduled tasks.
+ */
+async function collectSecurityState(osId) {
   return {
     ssh: collectSshState(),
     sudo: collectSudoState(),
     startupItems: collectStartupItems(osId),
+    windows: await collectWindowsPersistence(osId),
   };
 }
 
@@ -447,10 +566,11 @@ async function captureBeforeSnapshot(options = {}) {
   const osInfo = detectOs();
   const type = options.type || 'before';
 
-  const [packageManagers, processes, network] = await Promise.all([
+  const [packageManagers, processes, network, security] = await Promise.all([
     detectPackageManagers({ osId: osInfo.id }),
     collectProcesses(osInfo.id),
     collectNetworkPorts(osInfo.id),
+    collectSecurityState(osInfo.id),
   ]);
 
   return {
@@ -467,7 +587,7 @@ async function captureBeforeSnapshot(options = {}) {
       processes,
       network,
       tempFiles: collectTempFiles(),
-      security: collectSecurityState(osInfo.id),
+      security,
     },
   };
 }

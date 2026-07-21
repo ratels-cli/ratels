@@ -37,10 +37,11 @@ const {
 async function captureAfterSnapshot(options = {}) {
   const osInfo = detectOs();
 
-  const [packageManagers, processes, network] = await Promise.all([
+  const [packageManagers, processes, network, security] = await Promise.all([
     detectPackageManagers({ osId: osInfo.id }),
     collectProcesses(osInfo.id),
     collectNetworkPorts(osInfo.id),
+    collectSecurityState(osInfo.id),
   ]);
 
   return {
@@ -58,7 +59,7 @@ async function captureAfterSnapshot(options = {}) {
       processes,
       network,
       tempFiles: collectTempFiles(),
-      security: collectSecurityState(osInfo.id),
+      security,
     },
   };
 }
